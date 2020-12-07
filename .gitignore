@@ -1,0 +1,11 @@
+
+*.egg-info/
+*__pycache__/
+*~
+dist/
+
+.vscode
+.venv
+.idea
+venv
+virtualenvs
