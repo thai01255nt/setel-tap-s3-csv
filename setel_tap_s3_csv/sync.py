@@ -118,21 +118,21 @@ def sync_table_file(config: Dict, s3_path: str, table_spec: Dict, stream: Dict) 
 
     records_synced = 0
     for row in iterator:
-        custom_columns = {
-            s3.SDC_SOURCE_BUCKET_COLUMN: bucket,
-            s3.SDC_SOURCE_FILE_COLUMN: s3_path,
-
-            # index zero, +1 for header row
-            s3.SDC_SOURCE_LINENO_COLUMN: records_synced + 2
-        }
-        rec = {**row, **custom_columns}
         if not sync_one_one:
+            custom_columns = {
+                s3.SDC_SOURCE_BUCKET_COLUMN: bucket,
+                s3.SDC_SOURCE_FILE_COLUMN: s3_path,
+
+                # index zero, +1 for header row
+                s3.SDC_SOURCE_LINENO_COLUMN: records_synced + 2
+            }
+            rec = {**row, **custom_columns}
             with Transformer() as transformer:
                 to_write = transformer.transform(rec, stream['schema'], metadata.to_map(stream['metadata']))
             write_record(table_name, to_write)
         if sync_one_one:
             write_message(
-                OneOneMessage(table_name, rec, TagSet=tags, sync_one_one=sync_one_one, _sdc_source_file=s3_path))
+                OneOneMessage(table_name, row, TagSet=tags, sync_one_one=sync_one_one, _sdc_source_file=s3_path))
 
         records_synced += 1
 
