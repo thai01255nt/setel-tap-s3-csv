@@ -1,0 +1,7 @@
+boto3==1.9.57
+singer-encodings==0.0.*
+pipelinewise-singer-python==1.*
+voluptuous==0.10.5
+ujson==1.35.*
+messytables==0.15.*
+pipelinewise-tap-s3-csv==1.*

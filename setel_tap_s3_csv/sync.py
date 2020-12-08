@@ -4,14 +4,48 @@ Syncing related functions
 
 import sys
 import csv
+import pytz
 from typing import Dict
 
-from singer import metadata, Transformer, utils, get_bookmark, write_bookmark, write_state, write_record, get_logger
-from singer_encodings.csv import get_row_iterator # pylint:disable=no-name-in-module
+import singer
+from singer import metadata, Transformer, utils, get_bookmark, write_bookmark, write_state, write_record, write_message, \
+    get_logger, \
+    RecordMessage
+from singer_encodings.csv import get_row_iterator  # pylint:disable=no-name-in-module
 
-from tap_s3_csv import s3
+from setel_tap_s3_csv import s3
 
 LOGGER = get_logger('tap_s3_csv')
+
+
+class OneOneMessage(singer.messages.RecordMessage):
+    def __init__(self, stream, record, TagSet, _sdc_source_file, sync_one_one=True, version=None, time_extracted=None):
+        self.stream = stream
+        self.record = record
+        self.version = version
+        self.time_extracted = time_extracted
+        self.TagSet = TagSet
+        self.sync_one_one = sync_one_one
+        self._sdc_source_file = _sdc_source_file
+        if time_extracted and not time_extracted.tzinfo:
+            raise ValueError("'time_extracted' must be either None " +
+                             "or an aware datetime (with a time zone)")
+
+    def asdict(self):
+        result = {
+            'type': 'ONE_ONE_RECORD',
+            'stream': self.stream,
+            'record': self.record,
+            'TagSet': self.TagSet,
+            'sync_one_one': self.sync_one_one,
+            '_sdc_source_file': self._sdc_source_file,
+        }
+        if self.version is not None:
+            result['version'] = self.version
+        if self.time_extracted:
+            as_utc = self.time_extracted.astimezone(pytz.utc)
+            result['time_extracted'] = singer.utils.strftime(as_utc)
+        return result
 
 
 def sync_stream(config: Dict, state: Dict, table_spec: Dict, stream: Dict) -> int:
@@ -63,9 +97,15 @@ def sync_table_file(config: Dict, s3_path: str, table_spec: Dict, stream: Dict) 
     LOGGER.info('Syncing file "%s".', s3_path)
 
     bucket = config['bucket']
+    sync_one_one = config.get('sync_one_one', "True")
+    if sync_one_one or sync_one_one == "True" or sync_one_one == "true":
+        sync_one_one = True
+    elif not sync_one_one or sync_one_one == "False" or sync_one_one == "false":
+        sync_one_one = False
+    else:
+        raise Exception("Don't understand sync_one_one param in config, must be boolean")
     table_name = table_spec['table_name']
-
-    s3_file_handle = s3.get_file_handle(config, s3_path)
+    s3_file_handle, tags = s3.get_file_handle_custom(config, s3_path)
     # We observed data who's field size exceeded the default maximum of
     # 131072. We believe the primary consequence of the following setting
     # is that a malformed, wide CSV would potentially parse into a single
@@ -77,7 +117,6 @@ def sync_table_file(config: Dict, s3_path: str, table_spec: Dict, stream: Dict) 
     iterator = get_row_iterator(s3_file_handle._raw_stream, table_spec)  # pylint:disable=protected-access
 
     records_synced = 0
-
     for row in iterator:
         custom_columns = {
             s3.SDC_SOURCE_BUCKET_COLUMN: bucket,
@@ -87,11 +126,14 @@ def sync_table_file(config: Dict, s3_path: str, table_spec: Dict, stream: Dict) 
             s3.SDC_SOURCE_LINENO_COLUMN: records_synced + 2
         }
         rec = {**row, **custom_columns}
+        if not sync_one_one:
+            with Transformer() as transformer:
+                to_write = transformer.transform(rec, stream['schema'], metadata.to_map(stream['metadata']))
+            write_record(table_name, to_write)
+        if sync_one_one:
+            write_message(
+                OneOneMessage(table_name, rec, TagSet=tags, sync_one_one=sync_one_one, _sdc_source_file=s3_path))
 
-        with Transformer() as transformer:
-            to_write = transformer.transform(rec, stream['schema'], metadata.to_map(stream['metadata']))
-
-        write_record(table_name, to_write)
         records_synced += 1
 
     return records_synced
